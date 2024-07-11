@@ -21,9 +21,12 @@ package org.apache.paimon.io;
 import org.apache.paimon.data.BinaryRow;
 import org.apache.paimon.data.BinaryRowWriter;
 import org.apache.paimon.data.Timestamp;
+import org.apache.paimon.manifest.FileSource;
 import org.apache.paimon.stats.StatsTestUtils;
 
 import java.util.Collections;
+
+import static org.apache.paimon.stats.SimpleStats.EMPTY_STATS;
 
 /** Utils for {@link DataFileMeta}. */
 public class DataFileTestUtils {
@@ -43,7 +46,7 @@ public class DataFileTestUtils {
                 0L,
                 DataFileMeta.EMPTY_MIN_KEY,
                 DataFileMeta.EMPTY_MAX_KEY,
-                DataFileMeta.EMPTY_KEY_STATS,
+                EMPTY_STATS,
                 null,
                 minSeq,
                 maxSeq,
@@ -51,7 +54,9 @@ public class DataFileTestUtils {
                 DataFileMeta.DUMMY_LEVEL,
                 Collections.emptyList(),
                 Timestamp.fromEpochMillis(100),
-                maxSeq - minSeq + 1);
+                maxSeq - minSeq + 1,
+                null,
+                FileSource.APPEND);
     }
 
     public static DataFileMeta newFile() {
@@ -61,21 +66,28 @@ public class DataFileTestUtils {
                 0,
                 DataFileMeta.EMPTY_MIN_KEY,
                 DataFileMeta.EMPTY_MAX_KEY,
-                StatsTestUtils.newEmptyTableStats(),
-                StatsTestUtils.newEmptyTableStats(),
+                StatsTestUtils.newEmptySimpleStats(),
+                StatsTestUtils.newEmptySimpleStats(),
                 0,
                 0,
                 0,
                 0,
-                0L);
+                0L,
+                null,
+                FileSource.APPEND);
     }
 
     public static DataFileMeta newFile(
             String name, int level, int minKey, int maxKey, long maxSequence) {
+        return newFile(name, level, minKey, maxKey, maxSequence, 0L);
+    }
+
+    public static DataFileMeta newFile(
+            String name, int level, int minKey, int maxKey, long maxSequence, Long deleteRowCount) {
         return new DataFileMeta(
                 name,
                 maxKey - minKey + 1,
-                1,
+                maxKey - minKey + 1,
                 row(minKey),
                 row(maxKey),
                 null,
@@ -84,7 +96,9 @@ public class DataFileTestUtils {
                 maxSequence,
                 0,
                 level,
-                0L);
+                deleteRowCount,
+                null,
+                FileSource.APPEND);
     }
 
     public static BinaryRow row(int i) {

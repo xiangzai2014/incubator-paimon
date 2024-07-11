@@ -21,7 +21,6 @@ package org.apache.paimon.table;
 import org.apache.paimon.CoreOptions;
 import org.apache.paimon.KeyValue;
 import org.apache.paimon.KeyValueFileStore;
-import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.fs.FileIO;
 import org.apache.paimon.fs.Path;
 import org.apache.paimon.manifest.ManifestCacheFilter;
@@ -29,21 +28,16 @@ import org.apache.paimon.mergetree.compact.LookupMergeFunction;
 import org.apache.paimon.mergetree.compact.MergeFunctionFactory;
 import org.apache.paimon.operation.FileStoreScan;
 import org.apache.paimon.operation.KeyValueFileStoreScan;
-import org.apache.paimon.operation.Lock;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.predicate.Predicate;
-import org.apache.paimon.reader.RecordReader;
 import org.apache.paimon.schema.KeyValueFieldsExtractor;
 import org.apache.paimon.schema.TableSchema;
 import org.apache.paimon.table.query.LocalTableQuery;
-import org.apache.paimon.table.sink.RowKindGenerator;
 import org.apache.paimon.table.sink.TableWriteImpl;
 import org.apache.paimon.table.source.InnerTableRead;
 import org.apache.paimon.table.source.KeyValueTableRead;
 import org.apache.paimon.table.source.MergeTreeSplitGenerator;
 import org.apache.paimon.table.source.SplitGenerator;
-import org.apache.paimon.table.source.ValueContentRowDataRecordIterator;
-import org.apache.paimon.types.RowKind;
 import org.apache.paimon.types.RowType;
 
 import java.util.List;
@@ -61,7 +55,7 @@ class PrimaryKeyFileStoreTable extends AbstractFileStoreTable {
     private transient KeyValueFileStore lazyStore;
 
     PrimaryKeyFileStoreTable(FileIO fileIO, Path path, TableSchema tableSchema) {
-        this(fileIO, path, tableSchema, new CatalogEnvironment(Lock.emptyFactory(), null, null));
+        this(fileIO, path, tableSchema, CatalogEnvironment.empty());
     }
 
     PrimaryKeyFileStoreTable(
@@ -157,25 +151,8 @@ class PrimaryKeyFileStoreTable extends AbstractFileStoreTable {
 
     @Override
     public InnerTableRead newRead() {
-        return new KeyValueTableRead(store().newRead(), schema()) {
-
-            @Override
-            public void projection(int[][] projection) {
-                read.withValueProjection(projection);
-            }
-
-            @Override
-            protected RecordReader.RecordIterator<InternalRow> rowDataRecordIteratorFromKv(
-                    RecordReader.RecordIterator<KeyValue> kvRecordIterator) {
-                return new ValueContentRowDataRecordIterator(kvRecordIterator);
-            }
-
-            @Override
-            public InnerTableRead forceKeepDelete() {
-                read.forceKeepDelete();
-                return this;
-            }
-        };
+        return new KeyValueTableRead(
+                () -> store().newRead(), () -> store().newBatchRawFileRead(), schema());
     }
 
     @Override
@@ -186,21 +163,18 @@ class PrimaryKeyFileStoreTable extends AbstractFileStoreTable {
     @Override
     public TableWriteImpl<KeyValue> newWrite(
             String commitUser, ManifestCacheFilter manifestFilter) {
-        TableSchema schema = schema();
-        CoreOptions options = store().options();
-        RowKindGenerator rowKindGenerator = RowKindGenerator.create(schema, options);
         KeyValue kv = new KeyValue();
         return new TableWriteImpl<>(
                 store().newWrite(commitUser, manifestFilter),
                 createRowKeyExtractor(),
-                record -> {
-                    InternalRow row = record.row();
-                    RowKind rowKind =
-                            rowKindGenerator == null
-                                    ? row.getRowKind()
-                                    : rowKindGenerator.generate(row);
-                    return kv.replace(record.primaryKey(), KeyValue.UNKNOWN_SEQUENCE, rowKind, row);
-                });
+                (record, rowKind) ->
+                        kv.replace(
+                                record.primaryKey(),
+                                KeyValue.UNKNOWN_SEQUENCE,
+                                rowKind,
+                                record.row()),
+                rowKindGenerator(),
+                CoreOptions.fromMap(tableSchema.options()).ignoreDelete());
     }
 
     @Override

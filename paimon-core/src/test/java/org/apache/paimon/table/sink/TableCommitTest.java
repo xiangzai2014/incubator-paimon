@@ -24,7 +24,6 @@ import org.apache.paimon.fs.Path;
 import org.apache.paimon.fs.local.LocalFileIO;
 import org.apache.paimon.io.DataFilePathFactory;
 import org.apache.paimon.manifest.ManifestCommittable;
-import org.apache.paimon.operation.Lock;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.schema.Schema;
 import org.apache.paimon.schema.SchemaManager;
@@ -38,7 +37,6 @@ import org.apache.paimon.types.DataTypes;
 import org.apache.paimon.types.RowType;
 import org.apache.paimon.utils.ExceptionUtils;
 import org.apache.paimon.utils.FailingFileIO;
-import org.apache.paimon.utils.FileStorePathFactory;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -56,6 +54,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import java.util.stream.LongStream;
 
+import static org.apache.paimon.utils.FileStorePathFactoryTest.createNonPartFactory;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -125,7 +124,7 @@ public class TableCommitTest {
                         new FailingFileIO(),
                         new Path(path),
                         tableSchema,
-                        new CatalogEnvironment(Lock.emptyFactory(), null, null));
+                        CatalogEnvironment.empty());
 
         String commitUser = UUID.randomUUID().toString();
         StreamTableWrite write = table.newWrite(commitUser);
@@ -212,7 +211,7 @@ public class TableCommitTest {
                         LocalFileIO.create(),
                         new Path(path),
                         tableSchema,
-                        new CatalogEnvironment(Lock.emptyFactory(), null, null));
+                        CatalogEnvironment.empty());
 
         String commitUser = UUID.randomUUID().toString();
         StreamTableWrite write = table.newWrite(commitUser);
@@ -232,7 +231,7 @@ public class TableCommitTest {
                         (CommitMessageImpl) messages0.get(0),
                         (CommitMessageImpl) messages1.get(0))) {
             DataFilePathFactory pathFactory =
-                    new FileStorePathFactory(new Path(path))
+                    createNonPartFactory(new Path(path))
                             .createDataFilePathFactory(message.partition(), message.bucket());
             Path file =
                     message.newFilesIncrement().newFiles().get(0).collectFiles(pathFactory).get(0);

@@ -24,11 +24,10 @@ import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.fs.FileIO;
 import org.apache.paimon.fs.Path;
 import org.apache.paimon.manifest.ManifestCacheFilter;
-import org.apache.paimon.operation.AppendOnlyFileStoreRead;
 import org.apache.paimon.operation.AppendOnlyFileStoreScan;
 import org.apache.paimon.operation.AppendOnlyFileStoreWrite;
 import org.apache.paimon.operation.FileStoreScan;
-import org.apache.paimon.operation.Lock;
+import org.apache.paimon.operation.RawFileSplitRead;
 import org.apache.paimon.predicate.Predicate;
 import org.apache.paimon.reader.RecordReader;
 import org.apache.paimon.schema.TableSchema;
@@ -54,7 +53,7 @@ class AppendOnlyFileStoreTable extends AbstractFileStoreTable {
     private transient AppendOnlyFileStore lazyStore;
 
     AppendOnlyFileStoreTable(FileIO fileIO, Path path, TableSchema tableSchema) {
-        this(fileIO, path, tableSchema, new CatalogEnvironment(Lock.emptyFactory(), null, null));
+        this(fileIO, path, tableSchema, CatalogEnvironment.empty());
     }
 
     AppendOnlyFileStoreTable(
@@ -112,8 +111,14 @@ class AppendOnlyFileStoreTable extends AbstractFileStoreTable {
 
     @Override
     public InnerTableRead newRead() {
-        AppendOnlyFileStoreRead read = store().newRead();
-        return new AbstractDataTableRead<InternalRow>(read, schema()) {
+        RawFileSplitRead read = store().newRead();
+        return new AbstractDataTableRead<InternalRow>(schema()) {
+
+            @Override
+            protected InnerTableRead innerWithFilter(Predicate predicate) {
+                read.withFilter(predicate);
+                return this;
+            }
 
             @Override
             public void projection(int[][] projection) {
@@ -141,13 +146,15 @@ class AppendOnlyFileStoreTable extends AbstractFileStoreTable {
         return new TableWriteImpl<>(
                 writer,
                 createRowKeyExtractor(),
-                record -> {
+                (record, rowKind) -> {
                     Preconditions.checkState(
-                            record.row().getRowKind() == RowKind.INSERT,
+                            rowKind.isAdd(),
                             "Append only writer can not accept row with RowKind %s",
-                            record.row().getRowKind());
+                            rowKind);
                     return record.row();
-                });
+                },
+                rowKindGenerator(),
+                CoreOptions.fromMap(tableSchema.options()).ignoreDelete());
     }
 
     @Override

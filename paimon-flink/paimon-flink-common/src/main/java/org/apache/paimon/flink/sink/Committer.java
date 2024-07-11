@@ -18,7 +18,10 @@
 
 package org.apache.paimon.flink.sink;
 
+import org.apache.flink.api.common.state.OperatorStateStore;
 import org.apache.flink.metrics.groups.OperatorMetricGroup;
+
+import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.io.Serializable;
@@ -50,14 +53,67 @@ public interface Committer<CommitT, GlobalCommitT> extends AutoCloseable {
      * Filter out all {@link GlobalCommitT} which have committed, and commit the remaining {@link
      * GlobalCommitT}.
      */
-    int filterAndCommit(List<GlobalCommitT> globalCommittables) throws IOException;
+    int filterAndCommit(List<GlobalCommitT> globalCommittables, boolean checkAppendFiles)
+            throws IOException;
+
+    default int filterAndCommit(List<GlobalCommitT> globalCommittables) throws IOException {
+        return filterAndCommit(globalCommittables, true);
+    }
 
     Map<Long, List<CommitT>> groupByCheckpoint(Collection<CommitT> committables);
 
     /** Factory to create {@link Committer}. */
     interface Factory<CommitT, GlobalCommitT> extends Serializable {
 
-        Committer<CommitT, GlobalCommitT> create(
-                String commitUser, OperatorMetricGroup metricGroup);
+        Committer<CommitT, GlobalCommitT> create(Context context);
+    }
+
+    /** Context to create {@link Committer}. */
+    interface Context {
+
+        String commitUser();
+
+        @Nullable
+        OperatorMetricGroup metricGroup();
+
+        boolean streamingCheckpointEnabled();
+
+        boolean isRestored();
+
+        OperatorStateStore stateStore();
+    }
+
+    static Context createContext(
+            String commitUser,
+            @Nullable OperatorMetricGroup metricGroup,
+            boolean streamingCheckpointEnabled,
+            boolean isRestored,
+            OperatorStateStore stateStore) {
+        return new Committer.Context() {
+            @Override
+            public String commitUser() {
+                return commitUser;
+            }
+
+            @Override
+            public OperatorMetricGroup metricGroup() {
+                return metricGroup;
+            }
+
+            @Override
+            public boolean streamingCheckpointEnabled() {
+                return streamingCheckpointEnabled;
+            }
+
+            @Override
+            public boolean isRestored() {
+                return isRestored;
+            }
+
+            @Override
+            public OperatorStateStore stateStore() {
+                return stateStore;
+            }
+        };
     }
 }

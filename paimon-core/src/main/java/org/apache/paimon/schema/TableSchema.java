@@ -49,7 +49,8 @@ public class TableSchema implements Serializable {
     private static final long serialVersionUID = 1L;
 
     public static final int PAIMON_07_VERSION = 1;
-    public static final int CURRENT_VERSION = 2;
+    public static final int PAIMON_08_VERSION = 2;
+    public static final int CURRENT_VERSION = 3;
 
     // version of schema for paimon
     private final int version;
@@ -174,9 +175,6 @@ public class TableSchema implements Serializable {
         List<String> bucketKeys = originalBucketKeys();
         if (bucketKeys.isEmpty()) {
             bucketKeys = trimmedPrimaryKeys();
-        }
-        if (bucketKeys.isEmpty()) {
-            bucketKeys = fieldNames();
         }
         return bucketKeys;
     }

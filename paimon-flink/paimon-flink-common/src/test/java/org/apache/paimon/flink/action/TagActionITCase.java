@@ -53,6 +53,7 @@ public class TagActionITCase extends ActionITCaseBase {
                         rowType,
                         Collections.emptyList(),
                         Collections.singletonList("k"),
+                        Collections.emptyList(),
                         Collections.emptyMap());
 
         StreamWriteBuilder writeBuilder = table.newStreamWriteBuilder().withCommitUser(commitUser);
@@ -110,6 +111,69 @@ public class TagActionITCase extends ActionITCaseBase {
                     String.format("CALL sys.delete_tag('%s.%s', 'tag2')", database, tableName));
         }
         assertThat(tagManager.tagExists("tag2")).isFalse();
+
+        // create tag1
+        if (ThreadLocalRandom.current().nextBoolean()) {
+            createAction(
+                            CreateTagAction.class,
+                            "create_tag",
+                            "--warehouse",
+                            warehouse,
+                            "--database",
+                            database,
+                            "--table",
+                            tableName,
+                            "--tag_name",
+                            "tag1",
+                            "--snapshot",
+                            "1")
+                    .run();
+        } else {
+            callProcedure(
+                    String.format("CALL sys.create_tag('%s.%s', 'tag1', 1)", database, tableName));
+        }
+
+        // create tag3
+        if (ThreadLocalRandom.current().nextBoolean()) {
+            createAction(
+                            CreateTagAction.class,
+                            "create_tag",
+                            "--warehouse",
+                            warehouse,
+                            "--database",
+                            database,
+                            "--table",
+                            tableName,
+                            "--tag_name",
+                            "tag3",
+                            "--snapshot",
+                            "3")
+                    .run();
+        } else {
+            callProcedure(
+                    String.format("CALL sys.create_tag('%s.%s', 'tag3', 3)", database, tableName));
+        }
+
+        if (ThreadLocalRandom.current().nextBoolean()) {
+            createAction(
+                            DeleteTagAction.class,
+                            "delete_tag",
+                            "--warehouse",
+                            warehouse,
+                            "--database",
+                            database,
+                            "--table",
+                            tableName,
+                            "--tag_name",
+                            "tag1,tag3")
+                    .run();
+        } else {
+            callProcedure(
+                    String.format(
+                            "CALL sys.delete_tag('%s.%s', 'tag1,tag3')", database, tableName));
+        }
+        assertThat(tagManager.tagExists("tag1")).isFalse();
+        assertThat(tagManager.tagExists("tag3")).isFalse();
     }
 
     @Test
@@ -125,6 +189,7 @@ public class TagActionITCase extends ActionITCaseBase {
                         rowType,
                         Collections.emptyList(),
                         Collections.singletonList("k"),
+                        Collections.emptyList(),
                         Collections.emptyMap());
 
         StreamWriteBuilder writeBuilder = table.newStreamWriteBuilder().withCommitUser(commitUser);
@@ -153,7 +218,7 @@ public class TagActionITCase extends ActionITCaseBase {
                     .run();
         } else {
             callProcedure(
-                    String.format("CALL sys.create_tag('%s.%s', 'tag2', 2)", database, tableName));
+                    String.format("CALL sys.create_tag('%s.%s', 'tag2',  2)", database, tableName));
         }
         assertThat(tagManager.tagExists("tag2")).isTrue();
     }

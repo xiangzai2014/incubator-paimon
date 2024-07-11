@@ -18,6 +18,8 @@
 
 package org.apache.paimon.spark;
 
+import org.apache.paimon.data.GenericArray;
+import org.apache.paimon.data.GenericRow;
 import org.apache.paimon.data.Timestamp;
 import org.apache.paimon.predicate.Predicate;
 import org.apache.paimon.predicate.PredicateBuilder;
@@ -26,6 +28,7 @@ import org.apache.paimon.types.DateType;
 import org.apache.paimon.types.IntType;
 import org.apache.paimon.types.RowType;
 import org.apache.paimon.types.TimestampType;
+import org.apache.paimon.types.VarCharType;
 
 import org.apache.spark.sql.sources.EqualNullSafe;
 import org.apache.spark.sql.sources.EqualTo;
@@ -36,6 +39,9 @@ import org.apache.spark.sql.sources.IsNotNull;
 import org.apache.spark.sql.sources.IsNull;
 import org.apache.spark.sql.sources.LessThan;
 import org.apache.spark.sql.sources.LessThanOrEqual;
+import org.apache.spark.sql.sources.Not;
+import org.apache.spark.sql.sources.StringEndsWith;
+import org.apache.spark.sql.sources.StringStartsWith;
 import org.junit.jupiter.api.Test;
 
 import java.sql.Date;
@@ -43,10 +49,14 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 
+import static org.apache.paimon.data.BinaryString.fromString;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowableOfType;
 
 /** Test for {@link SparkFilterConverter}. */
 public class SparkFilterConverterTest {
@@ -143,6 +153,20 @@ public class SparkFilterConverterTest {
         Predicate expectedLargeIn = builder.in(0, Arrays.asList(literals));
         Predicate actualLargeIn = converter.convert(largeIn);
         assertThat(actualLargeIn).isEqualTo(expectedLargeIn);
+
+        RowType rowType01 =
+                new RowType(Collections.singletonList(new DataField(0, "id", new VarCharType())));
+        SparkFilterConverter converter01 = new SparkFilterConverter(rowType01);
+        StringEndsWith endsWith = StringEndsWith.apply("id", "abc");
+        Predicate endsWithPre = converter01.convert(endsWith);
+        GenericRow row = GenericRow.of(fromString("aabc"));
+        GenericRow max = GenericRow.of(fromString("xasxwsa"));
+        GenericRow min = GenericRow.of(fromString("aaaaa"));
+        boolean test = endsWithPre.test(row);
+        Integer[] nullCount = {null};
+        boolean test1 = endsWithPre.test(10, min, max, new GenericArray(nullCount));
+        assertThat(test).isEqualTo(true);
+        assertThat(test1).isEqualTo(true);
     }
 
     @Test
@@ -182,5 +206,18 @@ public class SparkFilterConverterTest {
 
         assertThat(dateExpression).isEqualTo(rawExpression);
         assertThat(localDateExpression).isEqualTo(rawExpression);
+    }
+
+    @Test
+    public void testIgnoreFailure() {
+        List<DataField> dataFields = new ArrayList<>();
+        dataFields.add(new DataField(0, "id", new IntType()));
+        dataFields.add(new DataField(1, "name", new VarCharType(VarCharType.MAX_LENGTH)));
+        RowType rowType = new RowType(dataFields);
+        SparkFilterConverter converter = new SparkFilterConverter(rowType);
+
+        Not not = Not.apply(StringStartsWith.apply("name", "paimon"));
+        catchThrowableOfType(() -> converter.convert(not), UnsupportedOperationException.class);
+        assertThat(converter.convertIgnoreFailure(not)).isNull();
     }
 }

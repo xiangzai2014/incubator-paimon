@@ -28,6 +28,8 @@ import org.apache.paimon.format.FormatReaderFactory;
 import org.apache.paimon.format.parquet.reader.ColumnReader;
 import org.apache.paimon.format.parquet.reader.ParquetDecimalVector;
 import org.apache.paimon.format.parquet.reader.ParquetTimestampVector;
+import org.apache.paimon.format.parquet.type.ParquetField;
+import org.apache.paimon.fs.Path;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.reader.RecordReader;
 import org.apache.paimon.reader.RecordReader.RecordIterator;
@@ -38,8 +40,11 @@ import org.apache.paimon.utils.Pool;
 import org.apache.parquet.ParquetReadOptions;
 import org.apache.parquet.column.ColumnDescriptor;
 import org.apache.parquet.column.page.PageReadStore;
+import org.apache.parquet.filter2.compat.FilterCompat;
 import org.apache.parquet.hadoop.ParquetFileReader;
 import org.apache.parquet.hadoop.ParquetInputFormat;
+import org.apache.parquet.io.ColumnIOFactory;
+import org.apache.parquet.io.MessageColumnIO;
 import org.apache.parquet.schema.GroupType;
 import org.apache.parquet.schema.MessageType;
 import org.apache.parquet.schema.Type;
@@ -55,6 +60,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+import static org.apache.paimon.format.parquet.reader.ParquetSplitReaderUtil.buildFieldsList;
 import static org.apache.paimon.format.parquet.reader.ParquetSplitReaderUtil.createColumnReader;
 import static org.apache.paimon.format.parquet.reader.ParquetSplitReaderUtil.createWritableColumnVector;
 import static org.apache.parquet.hadoop.UnmaterializableRecordCounter.BAD_RECORD_THRESHOLD_CONF_KEY;
@@ -67,21 +73,25 @@ public class ParquetReaderFactory implements FormatReaderFactory {
 
     private static final Logger LOG = LoggerFactory.getLogger(ParquetReaderFactory.class);
 
-    private static final long serialVersionUID = 1L;
-
     private static final String ALLOCATION_SIZE = "parquet.read.allocation.size";
 
     private final Options conf;
+
+    private final RowType projectedType;
     private final String[] projectedFields;
     private final DataType[] projectedTypes;
     private final int batchSize;
+    private final FilterCompat.Filter filter;
     private final Set<Integer> unknownFieldsIndices = new HashSet<>();
 
-    public ParquetReaderFactory(Options conf, RowType projectedType, int batchSize) {
+    public ParquetReaderFactory(
+            Options conf, RowType projectedType, int batchSize, FilterCompat.Filter filter) {
         this.conf = conf;
+        this.projectedType = projectedType;
         this.projectedFields = projectedType.getFieldNames().toArray(new String[0]);
         this.projectedTypes = projectedType.getFieldTypes().toArray(new DataType[0]);
         this.batchSize = batchSize;
+        this.filter = filter;
     }
 
     @Override
@@ -100,9 +110,15 @@ public class ParquetReaderFactory implements FormatReaderFactory {
 
         checkSchema(fileSchema, requestedSchema);
 
-        Pool<ParquetReaderBatch> poolOfBatches = createPoolOfBatches(requestedSchema);
+        Pool<ParquetReaderBatch> poolOfBatches =
+                createPoolOfBatches(context.filePath(), requestedSchema);
 
-        return new ParquetReader(reader, requestedSchema, reader.getRecordCount(), poolOfBatches);
+        MessageColumnIO columnIO = new ColumnIOFactory().getColumnIO(requestedSchema);
+        List<ParquetField> fields =
+                buildFieldsList(projectedType.getFields(), projectedType.getFieldNames(), columnIO);
+
+        return new ParquetReader(
+                reader, requestedSchema, reader.getRecordCount(), poolOfBatches, fields);
     }
 
     private void setReadOptions(ParquetReadOptions.Builder builder) {
@@ -122,6 +138,7 @@ public class ParquetReaderFactory implements FormatReaderFactory {
         if (badRecordThresh != null) {
             builder.set(BAD_RECORD_THRESHOLD_CONF_KEY, badRecordThresh);
         }
+        builder.withRecordFilter(filter);
     }
 
     /** Clips `parquetSchema` according to `fieldNames`. */
@@ -174,21 +191,24 @@ public class ParquetReaderFactory implements FormatReaderFactory {
         }
     }
 
-    private Pool<ParquetReaderBatch> createPoolOfBatches(MessageType requestedSchema) {
+    private Pool<ParquetReaderBatch> createPoolOfBatches(
+            Path filePath, MessageType requestedSchema) {
         // In a VectorizedColumnBatch, the dictionary will be lazied deserialized.
         // If there are multiple batches at the same time, there may be thread safety problems,
         // because the deserialization of the dictionary depends on some internal structures.
         // We need set poolCapacity to 1.
         Pool<ParquetReaderBatch> pool = new Pool<>(1);
-        pool.add(createReaderBatch(requestedSchema, pool.recycler()));
+        pool.add(createReaderBatch(filePath, requestedSchema, pool.recycler()));
         return pool;
     }
 
     private ParquetReaderBatch createReaderBatch(
-            MessageType requestedSchema, Pool.Recycler<ParquetReaderBatch> recycler) {
+            Path filePath,
+            MessageType requestedSchema,
+            Pool.Recycler<ParquetReaderBatch> recycler) {
         WritableColumnVector[] writableVectors = createWritableVectors(requestedSchema);
         VectorizedColumnBatch columnarBatch = createVectorizedColumnBatch(writableVectors);
-        return createReaderBatch(writableVectors, columnarBatch, recycler);
+        return createReaderBatch(filePath, writableVectors, columnarBatch, recycler);
     }
 
     private WritableColumnVector[] createWritableVectors(MessageType requestedSchema) {
@@ -253,6 +273,8 @@ public class ParquetReaderFactory implements FormatReaderFactory {
         /** The current row's position in the file. */
         private long currentRowPosition;
 
+        private long nextRowPosition;
+
         /**
          * For each request column, the reader to read this column. This is NULL if this column is
          * missing from the file, in which case we populate the attribute with NULL.
@@ -260,11 +282,14 @@ public class ParquetReaderFactory implements FormatReaderFactory {
         @SuppressWarnings("rawtypes")
         private ColumnReader[] columnReaders;
 
+        private final List<ParquetField> fields;
+
         private ParquetReader(
                 ParquetFileReader reader,
                 MessageType requestedSchema,
                 long totalRowCount,
-                Pool<ParquetReaderBatch> pool) {
+                Pool<ParquetReaderBatch> pool,
+                List<ParquetField> fields) {
             this.reader = reader;
             this.requestedSchema = requestedSchema;
             this.totalRowCount = totalRowCount;
@@ -272,6 +297,8 @@ public class ParquetReaderFactory implements FormatReaderFactory {
             this.rowsReturned = 0;
             this.totalCountLoadedSoFar = 0;
             this.currentRowPosition = 0;
+            this.nextRowPosition = 0;
+            this.fields = fields;
         }
 
         @Nullable
@@ -279,13 +306,12 @@ public class ParquetReaderFactory implements FormatReaderFactory {
         public RecordIterator<InternalRow> readBatch() throws IOException {
             final ParquetReaderBatch batch = getCachedEntry();
 
-            long rowNumber = currentRowPosition;
             if (!nextBatch(batch)) {
                 batch.recycle();
                 return null;
             }
 
-            return batch.convertAndGetIterator(rowNumber);
+            return batch.convertAndGetIterator(currentRowPosition);
         }
 
         /** Advances to the next batch of rows. Returns false if there are no more. */
@@ -299,6 +325,8 @@ public class ParquetReaderFactory implements FormatReaderFactory {
             }
             if (rowsReturned == totalCountLoadedSoFar) {
                 readNextRowGroup();
+            } else {
+                currentRowPosition = nextRowPosition;
             }
 
             int num = (int) Math.min(batchSize, totalCountLoadedSoFar - rowsReturned);
@@ -311,14 +339,14 @@ public class ParquetReaderFactory implements FormatReaderFactory {
                 }
             }
             rowsReturned += num;
-            currentRowPosition += num;
+            nextRowPosition = currentRowPosition + num;
             batch.columnarBatch.setNumRows(num);
             return true;
         }
 
         private void readNextRowGroup() throws IOException {
-            PageReadStore pages = reader.readNextRowGroup();
-            if (pages == null) {
+            PageReadStore rowGroup = reader.readNextRowGroup();
+            if (rowGroup == null) {
                 throw new IOException(
                         "expecting more rows but reached last block. Read "
                                 + rowsReturned
@@ -335,11 +363,21 @@ public class ParquetReaderFactory implements FormatReaderFactory {
                                     projectedTypes[i],
                                     types.get(i),
                                     requestedSchema.getColumns(),
-                                    pages,
+                                    rowGroup,
+                                    fields.get(i),
                                     0);
                 }
             }
-            totalCountLoadedSoFar += pages.getRowCount();
+            totalCountLoadedSoFar += rowGroup.getRowCount();
+            if (rowGroup.getRowIndexOffset().isPresent()) {
+                currentRowPosition = rowGroup.getRowIndexOffset().get();
+            } else {
+                if (reader.rowGroupsFiltered()) {
+                    throw new RuntimeException(
+                            "There is a bug, rowIndexOffset must be present when row groups are filtered.");
+                }
+                currentRowPosition = nextRowPosition;
+            }
         }
 
         private ParquetReaderBatch getCachedEntry() throws IOException {
@@ -361,10 +399,11 @@ public class ParquetReaderFactory implements FormatReaderFactory {
     }
 
     private ParquetReaderBatch createReaderBatch(
+            Path filePath,
             WritableColumnVector[] writableVectors,
             VectorizedColumnBatch columnarBatch,
             Pool.Recycler<ParquetReaderBatch> recycler) {
-        return new ParquetReaderBatch(writableVectors, columnarBatch, recycler);
+        return new ParquetReaderBatch(filePath, writableVectors, columnarBatch, recycler);
     }
 
     private static class ParquetReaderBatch {
@@ -376,13 +415,16 @@ public class ParquetReaderFactory implements FormatReaderFactory {
         private final ColumnarRowIterator result;
 
         protected ParquetReaderBatch(
+                Path filePath,
                 WritableColumnVector[] writableVectors,
                 VectorizedColumnBatch columnarBatch,
                 Pool.Recycler<ParquetReaderBatch> recycler) {
             this.writableVectors = writableVectors;
             this.columnarBatch = columnarBatch;
             this.recycler = recycler;
-            this.result = new ColumnarRowIterator(new ColumnarRow(columnarBatch), this::recycle);
+            this.result =
+                    new ColumnarRowIterator(
+                            filePath, new ColumnarRow(columnarBatch), this::recycle);
         }
 
         public void recycle() {
@@ -390,7 +432,7 @@ public class ParquetReaderFactory implements FormatReaderFactory {
         }
 
         public RecordIterator<InternalRow> convertAndGetIterator(long rowNumber) {
-            result.reset(columnarBatch.getNumRows(), rowNumber);
+            result.reset(rowNumber);
             return result;
         }
     }

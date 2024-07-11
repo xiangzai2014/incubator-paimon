@@ -22,11 +22,13 @@ import org.apache.paimon.annotation.Experimental;
 import org.apache.paimon.fs.FileIO;
 import org.apache.paimon.fs.Path;
 import org.apache.paimon.schema.TableSchema;
+import org.apache.paimon.types.DataField;
 import org.apache.paimon.types.DataType;
 import org.apache.paimon.utils.JsonSerdeUtil;
 import org.apache.paimon.utils.OptionalUtils;
 
 import org.apache.paimon.shade.jackson2.com.fasterxml.jackson.annotation.JsonCreator;
+import org.apache.paimon.shade.jackson2.com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import org.apache.paimon.shade.jackson2.com.fasterxml.jackson.annotation.JsonInclude;
 import org.apache.paimon.shade.jackson2.com.fasterxml.jackson.annotation.JsonProperty;
 
@@ -37,6 +39,7 @@ import java.util.Collections;
 import java.util.Map;
 import java.util.Objects;
 import java.util.OptionalLong;
+import java.util.stream.Collectors;
 
 /**
  * Global stats, supports the following stats.
@@ -48,6 +51,7 @@ import java.util.OptionalLong;
  * </ul>
  */
 @Experimental
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class Statistics {
 
     // ID of the snapshot this statistics collected from
@@ -117,18 +121,16 @@ public class Statistics {
     public void serializeFieldsToString(TableSchema schema) {
         try {
             if (colStats != null) {
+                Map<String, DataType> fields =
+                        schema.fields().stream()
+                                .collect(Collectors.toMap(DataField::name, DataField::type));
                 for (Map.Entry<String, ColStats<?>> entry : colStats.entrySet()) {
                     String colName = entry.getKey();
                     ColStats<?> colStats = entry.getValue();
-                    DataType type =
-                            schema.fields().stream()
-                                    .filter(field -> field.name().equals(colName))
-                                    .findFirst()
-                                    .orElseThrow(
-                                            () ->
-                                                    new IllegalStateException(
-                                                            "Unable to obtain the latest schema"))
-                                    .type();
+                    DataType type = fields.get(colName);
+                    if (type == null) {
+                        throw new IllegalStateException("Unable to obtain the latest schema");
+                    }
                     colStats.serializeFieldsToString(type);
                 }
             }
@@ -140,18 +142,16 @@ public class Statistics {
     public void deserializeFieldsFromString(TableSchema schema) {
         try {
             if (colStats != null) {
+                Map<String, DataType> fields =
+                        schema.fields().stream()
+                                .collect(Collectors.toMap(DataField::name, DataField::type));
                 for (Map.Entry<String, ColStats<?>> entry : colStats.entrySet()) {
                     String colName = entry.getKey();
                     ColStats<?> colStats = entry.getValue();
-                    DataType type =
-                            schema.fields().stream()
-                                    .filter(field -> field.name().equals(colName))
-                                    .findFirst()
-                                    .orElseThrow(
-                                            () ->
-                                                    new IllegalStateException(
-                                                            "Unable to obtain the latest schema"))
-                                    .type();
+                    DataType type = fields.get(colName);
+                    if (type == null) {
+                        throw new IllegalStateException("Unable to obtain the latest schema");
+                    }
                     colStats.deserializeFieldsFromString(type);
                 }
             }

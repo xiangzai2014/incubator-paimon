@@ -27,6 +27,7 @@ import org.apache.paimon.table.source.ReadBuilder;
 import org.apache.paimon.types.RowType;
 
 import java.io.Serializable;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -43,6 +44,10 @@ public interface Table extends Serializable {
 
     /** A name to identify this table. */
     String name();
+
+    default String fullName() {
+        return name();
+    }
 
     /** Returns the row type of this table. */
     RowType rowType();
@@ -76,17 +81,39 @@ public interface Table extends Serializable {
     @Experimental
     void createTag(String tagName, long fromSnapshotId);
 
+    @Experimental
+    void createTag(String tagName, long fromSnapshotId, Duration timeRetained);
+
     /** Create a tag from latest snapshot. */
     @Experimental
     void createTag(String tagName);
+
+    @Experimental
+    void createTag(String tagName, Duration timeRetained);
 
     /** Delete a tag by name. */
     @Experimental
     void deleteTag(String tagName);
 
+    /** Delete tags, tags are separated by commas. */
+    @Experimental
+    default void deleteTags(String tagNames) {
+        for (String tagName : tagNames.split(",")) {
+            deleteTag(tagName);
+        }
+    }
+
     /** Rollback table's state to a specific tag. */
     @Experimental
     void rollbackTo(String tagName);
+
+    /** Create a empty branch. */
+    @Experimental
+    void createBranch(String branchName);
+
+    /** Create a branch from given snapshot. */
+    @Experimental
+    void createBranch(String branchName, long snapshotId);
 
     /** Create a branch from given tag. */
     @Experimental
@@ -96,6 +123,18 @@ public interface Table extends Serializable {
     @Experimental
     void deleteBranch(String branchName);
 
+    /** Delete branches, branches are separated by commas. */
+    @Experimental
+    default void deleteBranches(String branchNames) {
+        for (String branch : branchNames.split(",")) {
+            deleteBranch(branch);
+        }
+    }
+
+    /** Merge a branch to main branch. */
+    @Experimental
+    void fastForward(String branchName);
+
     /** Merge a branch to main branch. */
     @Experimental
     void mergeBranch(String branchName);
@@ -103,6 +142,9 @@ public interface Table extends Serializable {
     /** Manually expire snapshots, parameters can be controlled independently of table options. */
     @Experimental
     ExpireSnapshots newExpireSnapshots();
+
+    @Experimental
+    ExpireSnapshots newExpireChangelog();
 
     // =============== Read & Write Operations ==================
 

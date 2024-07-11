@@ -23,8 +23,10 @@ import org.apache.paimon.table.sink.BatchWriteBuilder;
 import org.apache.paimon.table.sink.InnerTableCommit;
 import org.apache.paimon.table.sink.InnerTableWrite;
 import org.apache.paimon.table.sink.StreamWriteBuilder;
-import org.apache.paimon.table.source.InnerStreamTableScan;
+import org.apache.paimon.table.sink.WriteSelector;
+import org.apache.paimon.table.source.StreamDataTableScan;
 
+import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -70,6 +72,14 @@ public interface ReadonlyTable extends InnerTable {
     }
 
     @Override
+    default Optional<WriteSelector> newWriteSelector() {
+        throw new UnsupportedOperationException(
+                String.format(
+                        "Readonly Table %s does not support newWriteSelector.",
+                        this.getClass().getSimpleName()));
+    }
+
+    @Override
     default InnerTableWrite newWrite(String commitUser) {
         throw new UnsupportedOperationException(
                 String.format(
@@ -86,7 +96,7 @@ public interface ReadonlyTable extends InnerTable {
     }
 
     @Override
-    default InnerStreamTableScan newStreamScan() {
+    default StreamDataTableScan newStreamScan() {
         throw new UnsupportedOperationException(
                 String.format(
                         "Readonly Table %s does not support newStreamScan.",
@@ -110,7 +120,23 @@ public interface ReadonlyTable extends InnerTable {
     }
 
     @Override
+    default void createTag(String tagName, long fromSnapshotId, Duration timeRetained) {
+        throw new UnsupportedOperationException(
+                String.format(
+                        "Readonly Table %s does not support createTag.",
+                        this.getClass().getSimpleName()));
+    }
+
+    @Override
     default void createTag(String tagName) {
+        throw new UnsupportedOperationException(
+                String.format(
+                        "Readonly Table %s does not support createTag.",
+                        this.getClass().getSimpleName()));
+    }
+
+    @Override
+    default void createTag(String tagName, Duration timeRetained) {
         throw new UnsupportedOperationException(
                 String.format(
                         "Readonly Table %s does not support createTag.",
@@ -134,6 +160,22 @@ public interface ReadonlyTable extends InnerTable {
     }
 
     @Override
+    default void createBranch(String branchName) {
+        throw new UnsupportedOperationException(
+                String.format(
+                        "Readonly Table %s does not support create empty branch.",
+                        this.getClass().getSimpleName()));
+    }
+
+    @Override
+    default void createBranch(String branchName, long snapshotId) {
+        throw new UnsupportedOperationException(
+                String.format(
+                        "Readonly Table %s does not support createBranch with snapshotId.",
+                        this.getClass().getSimpleName()));
+    }
+
+    @Override
     default void createBranch(String branchName, String tagName) {
         throw new UnsupportedOperationException(
                 String.format(
@@ -150,6 +192,14 @@ public interface ReadonlyTable extends InnerTable {
     }
 
     @Override
+    default void fastForward(String branchName) {
+        throw new UnsupportedOperationException(
+                String.format(
+                        "Readonly Table %s does not support fastForward.",
+                        this.getClass().getSimpleName()));
+    }
+
+    @Override
     default void mergeBranch(String branchName) {
         throw new UnsupportedOperationException(
                 String.format(
@@ -162,6 +212,14 @@ public interface ReadonlyTable extends InnerTable {
         throw new UnsupportedOperationException(
                 String.format(
                         "Readonly Table %s does not support expireSnapshots.",
+                        this.getClass().getSimpleName()));
+    }
+
+    @Override
+    default ExpireSnapshots newExpireChangelog() {
+        throw new UnsupportedOperationException(
+                String.format(
+                        "Readonly Table %s does not support expireChangelog.",
                         this.getClass().getSimpleName()));
     }
 }

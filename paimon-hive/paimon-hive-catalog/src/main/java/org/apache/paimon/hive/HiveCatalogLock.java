@@ -19,6 +19,9 @@
 package org.apache.paimon.hive;
 
 import org.apache.paimon.catalog.CatalogLock;
+import org.apache.paimon.client.ClientPool;
+import org.apache.paimon.hive.pool.CachedClientPool;
+import org.apache.paimon.options.Options;
 import org.apache.paimon.utils.TimeUtils;
 
 import org.apache.hadoop.hive.conf.HiveConf;
@@ -39,19 +42,21 @@ import java.util.concurrent.Callable;
 
 import static org.apache.paimon.options.CatalogOptions.LOCK_ACQUIRE_TIMEOUT;
 import static org.apache.paimon.options.CatalogOptions.LOCK_CHECK_MAX_SLEEP;
-import static org.apache.paimon.utils.Preconditions.checkArgument;
 
 /** Hive {@link CatalogLock}. */
 public class HiveCatalogLock implements CatalogLock {
 
     static final String LOCK_IDENTIFIER = "hive";
 
-    private final IMetaStoreClient client;
+    private final ClientPool<IMetaStoreClient, TException> clients;
     private final long checkMaxSleep;
     private final long acquireTimeout;
 
-    public HiveCatalogLock(IMetaStoreClient client, long checkMaxSleep, long acquireTimeout) {
-        this.client = client;
+    public HiveCatalogLock(
+            ClientPool<IMetaStoreClient, TException> clients,
+            long checkMaxSleep,
+            long acquireTimeout) {
+        this.clients = clients;
         this.checkMaxSleep = checkMaxSleep;
         this.acquireTimeout = acquireTimeout;
     }
@@ -77,7 +82,7 @@ public class HiveCatalogLock implements CatalogLock {
                         Collections.singletonList(lockComponent),
                         System.getProperty("user.name"),
                         InetAddress.getLocalHost().getHostName());
-        LockResponse lockResponse = this.client.lock(lockRequest);
+        LockResponse lockResponse = clients.run(client -> client.lock(lockRequest));
 
         long nextSleep = 50;
         long startRetry = System.currentTimeMillis();
@@ -88,7 +93,8 @@ public class HiveCatalogLock implements CatalogLock {
             }
             Thread.sleep(nextSleep);
 
-            lockResponse = client.checkLock(lockResponse.getLockid());
+            final LockResponse tempLockResponse = lockResponse;
+            lockResponse = clients.run(client -> client.checkLock(tempLockResponse.getLockid()));
             if (System.currentTimeMillis() - startRetry > acquireTimeout) {
                 break;
             }
@@ -97,7 +103,8 @@ public class HiveCatalogLock implements CatalogLock {
 
         if (lockResponse.getState() != LockState.ACQUIRED) {
             if (lockResponse.getState() == LockState.WAITING) {
-                client.unlock(lockResponse.getLockid());
+                final LockResponse tempLockResponse = lockResponse;
+                clients.execute(client -> client.unlock(tempLockResponse.getLockid()));
             }
             throw new RuntimeException(
                     "Acquire lock failed with time: " + Duration.ofMillis(retryDuration));
@@ -105,35 +112,18 @@ public class HiveCatalogLock implements CatalogLock {
         return lockResponse.getLockid();
     }
 
-    private void unlock(long lockId) throws TException {
-        client.unlock(lockId);
+    private void unlock(long lockId) throws TException, InterruptedException {
+        clients.execute(client -> client.unlock(lockId));
     }
 
     @Override
     public void close() {
-        this.client.close();
+        // do nothing
     }
 
-    /** Catalog lock factory for hive. */
-    public static class HiveCatalogLockFactory implements LockFactory {
-
-        private static final long serialVersionUID = 1L;
-
-        @Override
-        public CatalogLock create(LockContext context) {
-            checkArgument(context instanceof HiveLockContext);
-            HiveLockContext hiveLockContext = (HiveLockContext) context;
-            HiveConf conf = hiveLockContext.hiveConf.conf();
-            return new HiveCatalogLock(
-                    HiveCatalog.createClient(conf, hiveLockContext.clientClassName),
-                    checkMaxSleep(conf),
-                    acquireTimeout(conf));
-        }
-
-        @Override
-        public String identifier() {
-            return LOCK_IDENTIFIER;
-        }
+    public static ClientPool<IMetaStoreClient, TException> createClients(
+            HiveConf conf, Options options, String clientClassName) {
+        return new CachedClientPool(conf, options, clientClassName);
     }
 
     public static long checkMaxSleep(HiveConf conf) {
@@ -150,15 +140,5 @@ public class HiveCatalogLock implements CatalogLock {
                                 LOCK_ACQUIRE_TIMEOUT.key(),
                                 TimeUtils.getStringInMillis(LOCK_ACQUIRE_TIMEOUT.defaultValue())))
                 .toMillis();
-    }
-
-    static class HiveLockContext implements LockContext {
-        private final SerializableHiveConf hiveConf;
-        private final String clientClassName;
-
-        public HiveLockContext(SerializableHiveConf hiveConf, String clientClassName) {
-            this.hiveConf = hiveConf;
-            this.clientClassName = clientClassName;
-        }
     }
 }

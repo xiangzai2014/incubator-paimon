@@ -21,15 +21,15 @@ package org.apache.paimon.flink;
 import org.apache.paimon.catalog.AbstractCatalog;
 import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.CatalogLock;
+import org.apache.paimon.catalog.CatalogLockContext;
+import org.apache.paimon.catalog.CatalogLockFactory;
 import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.flink.util.AbstractTestBase;
 import org.apache.paimon.fs.Path;
 import org.apache.paimon.utils.BlockingIterator;
 
-import org.apache.flink.api.common.restartstrategy.RestartStrategies;
 import org.apache.flink.streaming.api.environment.ExecutionCheckpointingOptions;
-import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
+import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
 import org.junit.jupiter.api.BeforeEach;
@@ -53,18 +53,16 @@ public class FileSystemCatalogITCase extends AbstractTestBase {
     private static final String DB_NAME = "default";
 
     private String path;
-    private StreamTableEnvironment tEnv;
+    private TableEnvironment tEnv;
 
     @BeforeEach
     public void setup() {
-        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-        env.getConfig().setRestartStrategy(RestartStrategies.noRestart());
-        env.setParallelism(1);
-
-        tEnv = StreamTableEnvironment.create(env);
-        tEnv.getConfig()
-                .getConfiguration()
-                .set(ExecutionCheckpointingOptions.ENABLE_UNALIGNED, false);
+        tEnv =
+                tableEnvironmentBuilder()
+                        .streamingMode()
+                        .parallelism(1)
+                        .setConf(ExecutionCheckpointingOptions.ENABLE_UNALIGNED, false)
+                        .build();
         path = getTempDirPath();
         tEnv.executeSql(
                 String.format("CREATE CATALOG fs WITH ('type'='paimon', 'warehouse'='%s')", path));
@@ -73,15 +71,18 @@ public class FileSystemCatalogITCase extends AbstractTestBase {
     @Test
     public void testWriteRead() throws Exception {
         tEnv.useCatalog("fs");
-        tEnv.executeSql("CREATE TABLE T (a STRING, b STRING, c STRING) WITH ('bucket' = '1')");
+        tEnv.executeSql(
+                "CREATE TABLE T (a STRING, b STRING, c STRING) WITH ('bucket' = '1', 'bucket-key' = 'a')");
         innerTestWriteRead();
     }
 
     @Test
     public void testRenameTable() throws Exception {
         tEnv.useCatalog("fs");
-        tEnv.executeSql("CREATE TABLE t1 (a INT) WITH ('bucket' = '1')").await();
-        tEnv.executeSql("CREATE TABLE t2 (a INT) WITH ('bucket' = '1')").await();
+        tEnv.executeSql("CREATE TABLE t1 (a INT) WITH ('bucket' = '1', 'bucket-key' = 'a')")
+                .await();
+        tEnv.executeSql("CREATE TABLE t2 (a INT) WITH ('bucket' = '1', 'bucket-key' = 'a')")
+                .await();
         tEnv.executeSql("INSERT INTO t1 VALUES(1),(2)").await();
         // the source table do not exist.
         assertThatThrownBy(() -> tEnv.executeSql("ALTER TABLE t3 RENAME TO t4"))
@@ -154,18 +155,6 @@ public class FileSystemCatalogITCase extends AbstractTestBase {
     @Test
     void testCatalogWithLockForSchema() throws Exception {
         LOCK_COUNT.set(0);
-        assertThatThrownBy(
-                        () ->
-                                tEnv.executeSql(
-                                                String.format(
-                                                        "CREATE CATALOG fs_with_lock WITH ("
-                                                                + "'type'='paimon', "
-                                                                + "'warehouse'='%s', "
-                                                                + "'lock.enabled'='true'"
-                                                                + ")",
-                                                        path))
-                                        .await())
-                .hasRootCauseMessage("No lock type when lock is enabled.");
         tEnv.executeSql(
                         String.format(
                                 "CREATE CATALOG fs_with_lock WITH ("
@@ -203,7 +192,8 @@ public class FileSystemCatalogITCase extends AbstractTestBase {
     }
 
     /** Lock factory for file system catalog. */
-    public static class FileSystemCatalogDummyLockFactory implements CatalogLock.LockFactory {
+    public static class FileSystemCatalogDummyLockFactory implements CatalogLockFactory {
+
         private static final String IDENTIFIER = "DUMMY";
 
         @Override
@@ -212,7 +202,7 @@ public class FileSystemCatalogITCase extends AbstractTestBase {
         }
 
         @Override
-        public CatalogLock create(CatalogLock.LockContext context) {
+        public CatalogLock createLock(CatalogLockContext context) {
             return new CatalogLock() {
                 @Override
                 public <T> T runWithLock(String database, String table, Callable<T> callable)

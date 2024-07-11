@@ -30,6 +30,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.TimeZone;
 import java.util.stream.Collectors;
 
 import static org.apache.paimon.testutils.assertj.PaimonAssertions.anyCauseMatches;
@@ -300,14 +301,14 @@ public class SchemaChangeITCase extends CatalogITCaseBase {
         sql("CREATE TABLE T (a STRING PRIMARY KEY NOT ENFORCED, b BOOLEAN, c BOOLEAN)");
         sql("INSERT INTO T VALUES('paimon', true, false)");
 
-        sql("ALTER TABLE T MODIFY (b CHAR(4), c VARCHAR(6))");
+        sql("ALTER TABLE T MODIFY (b STRING, c STRING)");
         List<Row> result = sql("SHOW CREATE TABLE T");
         assertThat(result.toString())
                 .contains(
                         "CREATE TABLE `PAIMON`.`default`.`T` (\n"
                                 + "  `a` VARCHAR(2147483647) NOT NULL,\n"
-                                + "  `b` CHAR(4),\n"
-                                + "  `c` VARCHAR(6),");
+                                + "  `b` VARCHAR(2147483647),\n"
+                                + "  `c` VARCHAR(2147483647),");
         sql("INSERT INTO T VALUES('apache', '345', '200')");
         result = sql("SELECT * FROM T");
         assertThat(result.stream().map(Objects::toString).collect(Collectors.toList()))
@@ -344,7 +345,7 @@ public class SchemaChangeITCase extends CatalogITCaseBase {
                                         DateTimeUtils.formatTimestamp(
                                                 DateTimeUtils.parseTimestampData(
                                                         "1970-01-01 00:00:04.001", 3),
-                                                DateTimeUtils.LOCAL_TZ,
+                                                TimeZone.getDefault(),
                                                 3))
                                 + "]");
     }
@@ -451,7 +452,7 @@ public class SchemaChangeITCase extends CatalogITCaseBase {
                                 + DateTimeUtils.timestampToTimestampWithLocalZone(
                                                 DateTimeUtils.parseTimestampData(
                                                         "2022-12-12 00:30:00.123456", 3),
-                                                DateTimeUtils.LOCAL_TZ)
+                                                TimeZone.getDefault())
                                         .toLocalDateTime()
                                         .format(DateTimeFormatter.ISO_LOCAL_DATE_TIME)
                                 + "Z"
@@ -506,7 +507,7 @@ public class SchemaChangeITCase extends CatalogITCaseBase {
                                 + DateTimeUtils.timestampToTimestampWithLocalZone(
                                                 DateTimeUtils.parseTimestampData(
                                                         "2022-12-02 09:00:00.123456", 6),
-                                                DateTimeUtils.LOCAL_TZ)
+                                                TimeZone.getDefault())
                                         .toLocalDateTime()
                                         .format(DateTimeFormatter.ISO_LOCAL_DATE_TIME)
                                 + "Z, "
@@ -514,7 +515,7 @@ public class SchemaChangeITCase extends CatalogITCaseBase {
                                 + DateTimeUtils.timestampWithLocalZoneToTimestamp(
                                                 DateTimeUtils.parseTimestampData(
                                                         "1970-01-01 00:00:04.001", 3),
-                                                DateTimeUtils.LOCAL_TZ)
+                                                TimeZone.getDefault())
                                         .toLocalDateTime()
                                         .format(DateTimeFormatter.ISO_LOCAL_DATE_TIME)
                                 + "]");
@@ -540,7 +541,7 @@ public class SchemaChangeITCase extends CatalogITCaseBase {
                         "+I[2022-12-12T00:00, "
                                 + DateTimeUtils.timestampToTimestampWithLocalZone(
                                                 DateTimeUtils.parseTimestampData("2022-12-11", 6),
-                                                DateTimeUtils.LOCAL_TZ)
+                                                TimeZone.getDefault())
                                         .toLocalDateTime()
                                         .format(DateTimeFormatter.ISO_LOCAL_DATE_TIME)
                                 + "Z"
@@ -847,17 +848,18 @@ public class SchemaChangeITCase extends CatalogITCaseBase {
     @Test
     public void testSetAndResetImmutableOptions() throws Exception {
         // bucket-key is immutable
-        sql("CREATE TABLE T1 (a STRING, b STRING, c STRING) WITH ('bucket' = '1')");
+        sql(
+                "CREATE TABLE T1 (a STRING, b STRING, c STRING) WITH ('bucket' = '1', 'bucket-key' = 'a')");
 
         assertThatThrownBy(() -> sql("ALTER TABLE T1 SET ('bucket-key' = 'c')"))
-                .getRootCause()
+                .rootCause()
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessage("Change 'bucket-key' is not supported yet.");
 
         sql(
                 "CREATE TABLE T2 (a STRING, b STRING, c STRING) WITH ('bucket' = '1', 'bucket-key' = 'c')");
         assertThatThrownBy(() -> sql("ALTER TABLE T2 RESET ('bucket-key')"))
-                .getRootCause()
+                .rootCause()
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessage("Change 'bucket-key' is not supported yet.");
 
@@ -865,14 +867,14 @@ public class SchemaChangeITCase extends CatalogITCaseBase {
         sql(
                 "CREATE TABLE T4 (a STRING, b STRING, c STRING) WITH ('merge-engine' = 'partial-update')");
         assertThatThrownBy(() -> sql("ALTER TABLE T4 RESET ('merge-engine')"))
-                .getRootCause()
+                .rootCause()
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessage("Change 'merge-engine' is not supported yet.");
 
         // sequence.field is immutable
         sql("CREATE TABLE T5 (a STRING, b STRING, c STRING) WITH ('sequence.field' = 'b')");
         assertThatThrownBy(() -> sql("ALTER TABLE T5 SET ('sequence.field' = 'c')"))
-                .getRootCause()
+                .rootCause()
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessage("Change 'sequence.field' is not supported yet.");
     }
